@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"github.com/gorilla/websocket"
 	gossh "golang.org/x/crypto/ssh"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -90,6 +91,8 @@ var upgrader = websocket.Upgrader{
 		// 跨域处理，这里需要做一下安全防护。比如：请求白名单(这里只是简单的做了请求HOST白名单)
 		cwl := Conf.Web.CorsWhiteList
 		apibox.Log_Debug("Cors white list:", cwl)
+		apibox.Log_Debug("Request Host:", cwl)
+
 		for _, v := range strings.Split(cwl, ",") {
 			if strings.EqualFold(strings.TrimSpace(v), r.Host) {
 				return true
@@ -119,6 +122,7 @@ func SSHWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		apibox.Log_Err("Upgrade WebScoket Error:", err)
 		return
 	}
+	defer ws.Close()
 
 	vm_info := ctx.GetFormValue("vm_info")
 	cols := ctx.GetFormValue("cols")
@@ -160,9 +164,6 @@ func SSHWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				apibox.Log_Err(err)
 				return
 			}
-
-			session := sh.session
-			defer session.Close()
 
 			channel, incomingRequests, err := sh.client.Conn.OpenChannel("session", nil)
 			if err != nil {
@@ -214,13 +215,15 @@ func SSHWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				defer func() {
 					done <- true
 				}()
+
 				for {
-					messageType, p, err := ws.ReadMessage()
+					m, p, err := ws.ReadMessage()
 					if err != nil {
-						apibox.Log_Err(err)
+						apibox.Log_Warn(err.Error())
 						return
 					}
-					if messageType == websocket.TextMessage {
+
+					if m == websocket.TextMessage {
 						jsonMsgStruct := new(jsonMsg)
 						json.Unmarshal(p, jsonMsgStruct)
 						if jsonMsgStruct.Data != "" {
@@ -239,8 +242,13 @@ func SSHWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				rbuf := make([]byte, 1024)
 				for {
 					n, err := channel.Read(rbuf)
+
+					if io.EOF == err {
+						return
+					}
+
 					if err != nil {
-						apibox.Log_Err(err)
+						apibox.Log_Err(err.Error())
 						return
 					}
 
